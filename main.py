@@ -220,6 +220,7 @@ def main(args):
             model, criterion, data_loader_train, optimizer, device, epoch,
             args.clip_max_norm, external_logger=neptune_logger)
         lr_scheduler.step(epoch)
+        print(train_stats)
         if args.output_dir:
             checkpoint_paths = [output_dir / 'checkpoint.pth']
             # extra checkpoint before LR drop and every 100 epochs
@@ -238,6 +239,7 @@ def main(args):
             model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir,
             external_logger=neptune_logger, epoch=epoch
         )
+        print(test_stats)
 
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                      **{f'test_{k}': v for k, v in test_stats.items()},
