@@ -169,8 +169,7 @@ class MetricLogger(object):
                 v = v.item()
             assert isinstance(v, (float, int))
             self.meters[k].update(v)
-            if self.global_step % 100 == 0:
-                self.neptune.add_scalar(f"{self.series}/{k}", v, self.global_step)
+            self.neptune.add_scalar(f"{self.series}/{k}", v, self.global_step)
         self.global_step += 1
 
 

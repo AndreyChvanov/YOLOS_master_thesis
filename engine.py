@@ -75,7 +75,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     device: torch.device, epoch: int, max_norm: float = 0, external_logger=None):
     model.train()
     criterion.train()
-    metric_logger = utils.MetricLogger(delimiter="  ", neptune=external_logger, global_step=epoch)
+    metric_logger = utils.MetricLogger(delimiter="  ", neptune=external_logger, global_step=epoch * len(data_loader))
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
     header = 'Epoch: [{}]'.format(epoch)
@@ -131,7 +131,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
     model.eval()
     criterion.eval()
 
-    metric_logger = utils.MetricLogger(delimiter="  ", series='test', neptune=external_logger, global_step=epoch)
+    metric_logger = utils.MetricLogger(delimiter="  ", series='test', neptune=external_logger, global_step=epoch * len(data_loader))
     metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
     header = 'Test:'
 
