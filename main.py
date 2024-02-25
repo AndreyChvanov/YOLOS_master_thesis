@@ -245,11 +245,36 @@ def main(args):
                      **{f'test_{k}': v for k, v in test_stats.items()},
                      'epoch': epoch,
                      'n_parameters': n_parameters}
-        for k, v in train_stats.items():
-            neptune_logger.add_scalar(f"train_epoch/{k}",v, step=epoch)
-        for k, v in test_stats.items():
-            neptune_logger.add_scalar(f"test_epoch/{k}", v, step=epoch)
 
+        _names = {
+            0:  "Average Precision  (AP) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ]",
+            1: "Average Precision  (AP) @[ IoU=0.50      | area=   all | maxDets=100 ]",
+            2: "Average Precision  (AP) @[ IoU=0.75      | area=   all | maxDets=100 ]",
+            3: "Average Precision  (AP) @[ IoU=0.50:0.95 | area= small | maxDets=100 ]",
+            4: "Average Precision  (AP) @[ IoU=0.50:0.95 | area=medium | maxDets=100 ]",
+            5: "Average Precision  (AP) @[ IoU=0.50:0.95 | area= large | maxDets=100 ]",
+            6: "Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=  1 ]",
+            7: "Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets= 10 ]",
+            8: "Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ]",
+            9: "Average Recall     (AR) @[ IoU=0.50:0.95 | area= small | maxDets=100 ]",
+            10: "Average Recall     (AR) @[ IoU=0.50:0.95 | area=medium | maxDets=100 ]",
+            11: "Average Recall     (AR) @[ IoU=0.50:0.95 | area= large | maxDets=100 ]"
+        }
+
+        for k, v in train_stats.items():
+            if isinstance(v, list):
+                for i, current_v in enumerate(v):
+                    current_name = _names.get(i, "NONE")
+                    neptune_logger.add_scalar(f"train_epoch/{current_name}", v, step=epoch)
+            else:
+                neptune_logger.add_scalar(f"train_epoch/{k}",v, step=epoch)
+        for k, v in test_stats.items():
+            if isinstance(v, list):
+                for i, current_v in enumerate(v):
+                    current_name = _names.get(i, "NONE")
+                    neptune_logger.add_scalar(f"test_epoch/{current_name}", v, step=epoch)
+            else:
+                neptune_logger.add_scalar(f"test_epoch/{k}", v, step=epoch)
         if args.output_dir and utils.is_main_process():
             with (output_dir / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
