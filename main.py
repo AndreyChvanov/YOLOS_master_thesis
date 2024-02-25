@@ -18,6 +18,7 @@ from engine import evaluate, train_one_epoch
 from models import build_model as build_yolos_model
 
 from util.scheduler import create_scheduler
+from util.logger import NeptuneLogger
 
 
 def get_args_parser():
@@ -104,6 +105,8 @@ def get_args_parser():
     parser.add_argument('--world_size', default=1, type=int,
                         help='number of distributed processes')
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
+    parser.add_argument('--project_name', type=str)
+    parser.add_argument('--api_token', type=str)
     return parser
 
 
@@ -199,6 +202,7 @@ def main(args):
             lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
             args.start_epoch = checkpoint['epoch'] + 1
 
+
     if args.eval:
         test_stats, coco_evaluator = evaluate(model, criterion, postprocessors,
                                               data_loader_val, base_ds, device, args.output_dir)
@@ -208,12 +212,13 @@ def main(args):
 
     print("Start training")
     start_time = time.time()
+    neptune_logger= NeptuneLogger(project_name=args.project_name, api_token=args.api_token)
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             sampler_train.set_epoch(epoch)
         train_stats = train_one_epoch(
             model, criterion, data_loader_train, optimizer, device, epoch,
-            args.clip_max_norm)
+            args.clip_max_norm, external_logger=neptune_logger)
         lr_scheduler.step(epoch)
         if args.output_dir:
             checkpoint_paths = [output_dir / 'checkpoint.pth']
@@ -230,7 +235,8 @@ def main(args):
                 }, checkpoint_path)
 
         test_stats, coco_evaluator = evaluate(
-            model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir
+            model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir,
+            external_logger=neptune_logger
         )
 
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
