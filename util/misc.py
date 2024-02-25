@@ -156,11 +156,11 @@ def reduce_dict(input_dict, average=True):
 
 
 class MetricLogger(object):
-    def __init__(self, delimiter="\t", series="train", neptune=None):
+    def __init__(self, delimiter="\t", series="train", neptune=None, global_step=0):
         self.meters = defaultdict(SmoothedValue)
         self.delimiter = delimiter
         self.neptune = neptune
-        self.global_step = 0
+        self.global_step = global_step
         self.series = series
 
     def update(self, **kwargs):
@@ -169,7 +169,8 @@ class MetricLogger(object):
                 v = v.item()
             assert isinstance(v, (float, int))
             self.meters[k].update(v)
-            self.neptune.add_scalar(f"{self.series}/{k}", v, self.global_step)
+            if self.global_step % 100 == 0:
+                self.neptune.add_scalar(f"{self.series}/{k}", v, self.global_step)
         self.global_step += 1
 
 
