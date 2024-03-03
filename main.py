@@ -19,6 +19,7 @@ from models import build_model as build_yolos_model
 
 from util.scheduler import create_scheduler
 from util.logger import NeptuneLogger
+from util.yadisk_client import Disk
 
 
 def get_args_parser():
@@ -90,7 +91,7 @@ def get_args_parser():
     parser.add_argument('--coco_panoptic_path', type=str)
     parser.add_argument('--remove_difficult', action='store_true')
 
-    parser.add_argument('--output_dir', default='',
+    parser.add_argument('--output_dir', default='outputs',
                         help='path where to save, empty for no saving')
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')
@@ -107,6 +108,7 @@ def get_args_parser():
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
     parser.add_argument('--project_name', type=str)
     parser.add_argument('--api_token', type=str)
+    parser.add_argument('--yadisk_tokens', type=str)
     return parser
 
 
@@ -210,9 +212,14 @@ def main(args):
             utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, output_dir / "eval.pth")
         return
 
+    yadisk_tokens = args.yadisk_tokens.replace(" ", "").split(",")
+
+    disk = Disk(name_folder=args.project_name, root_dir="",
+                tokens=(yadisk_tokens[0], yadisk_tokens[1], yadisk_tokens[2]))
+
     print("Start training")
     start_time = time.time()
-    neptune_logger= NeptuneLogger(project_name=args.project_name, api_token=args.api_token)
+    neptune_logger = NeptuneLogger(project_name=args.project_name, api_token=args.api_token)
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             sampler_train.set_epoch(epoch)
@@ -222,9 +229,11 @@ def main(args):
         lr_scheduler.step(epoch)
         print(train_stats)
         if args.output_dir:
-            checkpoint_paths = [output_dir / 'checkpoint.pth']
+            print("SAVE")
+            # checkpoint_paths = [output_dir / 'checkpoint.pth']
+            checkpoint_paths = []
             # extra checkpoint before LR drop and every 100 epochs
-            if (epoch + 1) % args.lr_drop == 0 or (epoch + 1) % 20 == 0:
+            if (epoch + 1) % args.lr_drop == 0 or (epoch + 1) % 1 == 0:
                 checkpoint_paths.append(output_dir / f'checkpoint{epoch:04}.pth')
             for checkpoint_path in checkpoint_paths:
                 utils.save_on_master({
@@ -234,6 +243,8 @@ def main(args):
                     'epoch': epoch,
                     'args': args,
                 }, checkpoint_path)
+                disk.upload(checkpoint_path, "saves")
+
 
         test_stats, coco_evaluator = evaluate(
             model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir,
