@@ -244,7 +244,7 @@ def main(args):
                     'epoch': epoch,
                     'args': args,
                 }, checkpoint_path)
-                disk.upload(checkpoint_path, "saves")
+                disk.upload(str(checkpoint_path), "saves")
 
 
         test_stats, coco_evaluator = evaluate(
