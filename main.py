@@ -219,7 +219,7 @@ def main(args):
 
     print("Start training")
     start_time = time.time()
-    neptune_logger = NeptuneLogger(project_name=args.project_name, api_token=args.api_token)
+    neptune_logger = NeptuneLogger(project_name="", api_token=args.api_token)
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             sampler_train.set_epoch(epoch)
@@ -235,6 +235,7 @@ def main(args):
             # extra checkpoint before LR drop and every 100 epochs
             if (epoch + 1) % args.lr_drop == 0 or (epoch + 1) % 1 == 0:
                 checkpoint_paths.append(output_dir / f'checkpoint{epoch:04}.pth')
+            print(checkpoint_paths)
             for checkpoint_path in checkpoint_paths:
                 utils.save_on_master({
                     'model': model_without_ddp.state_dict(),
