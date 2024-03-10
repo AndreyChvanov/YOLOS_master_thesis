@@ -204,10 +204,12 @@ def main(args):
             lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
             args.start_epoch = checkpoint['epoch'] + 1
 
+    neptune_logger = NeptuneLogger(project_name="", api_token=args.api_token)
 
     if args.eval:
         test_stats, coco_evaluator = evaluate(model, criterion, postprocessors,
-                                              data_loader_val, base_ds, device, args.output_dir)
+                                              data_loader_val, base_ds, device, args.output_dir, external_logger=neptune_logger,
+                                              epoch=args.start_epoch)
         if args.output_dir:
             utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, output_dir / "eval.pth")
         return
@@ -219,7 +221,6 @@ def main(args):
 
     print("Start training")
     start_time = time.time()
-    neptune_logger = NeptuneLogger(project_name="", api_token=args.api_token)
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             sampler_train.set_epoch(epoch)
