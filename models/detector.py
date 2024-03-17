@@ -12,7 +12,6 @@ from functools import partial
 
 from .backbone import *
 
-
 from .matcher import build_matcher
 
 
@@ -30,8 +29,10 @@ class MLP(nn.Module):
             x = F.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
         return x
 
+
 class Detector(nn.Module):
-    def __init__(self, num_classes, pre_trained=None, det_token_num=100, backbone_name='tiny', init_pe_size=[800,1344], mid_pe_size=None, use_checkpoint=False):
+    def __init__(self, num_classes, pre_trained=None, det_token_num=100, backbone_name='tiny', init_pe_size=[800, 1344],
+                 mid_pe_size=None, use_checkpoint=False):
         super().__init__()
         # import pdb;pdb.set_trace()
         if backbone_name == 'tiny':
@@ -44,22 +45,26 @@ class Detector(nn.Module):
             self.backbone, hidden_dim = small_dWr(pretrained=pre_trained)
         else:
             raise ValueError(f'backbone {backbone_name} not supported')
-        
-        self.backbone.finetune_det(det_token_num=det_token_num, img_size=init_pe_size, mid_pe_size=mid_pe_size, use_checkpoint=use_checkpoint)
-        
+
+        self.backbone.finetune_det(det_token_num=det_token_num, img_size=init_pe_size, mid_pe_size=mid_pe_size,
+                                   use_checkpoint=use_checkpoint)
+
         self.class_embed = MLP(hidden_dim, hidden_dim, num_classes + 1, 3)
         self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
-    
-    def forward(self, samples: NestedTensor):
+
+    def forward(self, samples: NestedTensor, return_attention=False):
         # import pdb;pdb.set_trace()
         if isinstance(samples, (list, torch.Tensor)):
             samples = nested_tensor_from_tensor_list(samples)
-        x = self.backbone(samples.tensors)
+        if return_attention:
+            x, all_attn = self.backbone(samples.tensors, return_attention=True)
+        else:
+            x, all_attn = self.backbone(samples.tensors)
         # x = x[:, 1:,:]
         outputs_class = self.class_embed(x)
         outputs_coord = self.bbox_embed(x).sigmoid()
         out = {'pred_logits': outputs_class, 'pred_boxes': outputs_coord}
-        return out
+        return out, all_attn
 
     def forward_return_attention(self, samples: NestedTensor):
         if isinstance(samples, (list, torch.Tensor)):
@@ -67,12 +72,14 @@ class Detector(nn.Module):
         attention = self.backbone(samples.tensors, return_attention=True)
         return attention
 
+
 class SetCriterion(nn.Module):
     """ This class computes the loss for DETR.
     The process happens in two steps:
         1) we compute hungarian assignment between ground truth boxes and the outputs of the model
         2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
     """
+
     def __init__(self, num_classes, matcher, weight_dict, eos_coef, losses):
         """ Create the criterion.
         Parameters:
@@ -244,6 +251,7 @@ class SetCriterion(nn.Module):
 
 class PostProcess(nn.Module):
     """ This module converts the model's output into the format expected by the coco api"""
+
     @torch.no_grad()
     def forward(self, outputs, target_sizes):
         """ Perform the computation
@@ -271,7 +279,6 @@ class PostProcess(nn.Module):
         results = [{'scores': s, 'labels': l, 'boxes': b} for s, l, b in zip(scores, labels, boxes)]
 
         return results
-
 
 
 def build(args):
@@ -318,4 +325,3 @@ def build(args):
     postprocessors = {'bbox': PostProcess()}
 
     return model, criterion, postprocessors
-

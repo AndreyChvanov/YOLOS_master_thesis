@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 from functools import partial
 from .layers import DropPath, to_2tuple, trunc_normal_
-import torch.utils.checkpoint as checkpoint 
+import torch.utils.checkpoint as checkpoint
+
 
 class Mlp(nn.Module):
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
@@ -22,6 +23,7 @@ class Mlp(nn.Module):
         x = self.drop(x)
         return x
 
+
 class Attention(nn.Module):
     def __init__(self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0.):
         super().__init__()
@@ -37,20 +39,30 @@ class Attention(nn.Module):
 
     def forward(self, x, return_attention=False):
         B, N, C = x.shape
-        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)  # 3, B, num_head, N, c
-        q, k, v = qkv[0], qkv[1], qkv[2]   # make torchscript happy (cannot use tensor as tuple)
+        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1,
+                                                                                        4)  # 3, B, num_head, N, c
+        q, k, v = qkv[0], qkv[1], qkv[2]  # make torchscript happy (cannot use tensor as tuple)
 
         attn = (q @ k.transpose(-2, -1)) * self.scale
-        attn = attn.softmax(dim=-1)
-        attn = self.attn_drop(attn)
+        attn[:, :, 1, -100:] = -1e9
+        attn[:, :, -100:, 1] = -1e9
+        attn[:, :, 0, 1] = -1e9
+        attn[:, :, 1, 0] = -1e9
+        # x = torch.cat((cls_tokens, x, det_token), dim=1), det_token_num = 100
+        # attn[:, :, 0, -1] = -1e9
+        # attn[:, :, -1, :] = -1e9
 
-        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+        attention = attn.softmax(dim=-1)
+        attention = self.attn_drop(attention)
+
+        x = (attention @ v).transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
         if return_attention:
-            return x, attn
+            return x, (attention, attn)
         else:
             return x
+
 
 class Block(nn.Module):
 
@@ -81,6 +93,7 @@ class Block(nn.Module):
 class PatchEmbed(nn.Module):
     """ Image to Patch Embedding
     """
+
     def __init__(self, img_size=224, patch_size=16, in_chans=3, embed_dim=768):
         super().__init__()
         img_size = to_2tuple(img_size)
@@ -105,6 +118,7 @@ class HybridEmbed(nn.Module):
     """ CNN Feature Map Embedding
     Extract feature map from CNN, flatten, project to embedding dim.
     """
+
     def __init__(self, backbone, img_size=224, feature_size=None, in_chans=3, embed_dim=768):
         super().__init__()
         assert isinstance(backbone, nn.Module)
@@ -139,16 +153,17 @@ class HybridEmbed(nn.Module):
 class VisionTransformer(nn.Module):
     """ Vision Transformer with support for patch or hybrid CNN input stage
     """
+
     def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dim=768, depth=12,
                  num_heads=12, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop_rate=0., attn_drop_rate=0.,
                  drop_path_rate=0., hybrid_backbone=None, norm_layer=nn.LayerNorm, is_distill=False):
         super().__init__()
-        
-        if isinstance(img_size,tuple):
+
+        if isinstance(img_size, tuple):
             self.img_size = img_size
         else:
             self.img_size = to_2tuple(img_size)
-        
+
         self.depth = depth
         self.patch_size = patch_size
         self.in_chans = in_chans
@@ -180,8 +195,8 @@ class VisionTransformer(nn.Module):
         self.norm = norm_layer(embed_dim)
 
         # NOTE as per official impl, we could have a pre-logits representation dense layer + tanh here
-        #self.repr = nn.Linear(embed_dim, representation_size)
-        #self.repr_act = nn.Tanh()
+        # self.repr = nn.Linear(embed_dim, representation_size)
+        # self.repr_act = nn.Tanh()
 
         # Classifier head
         # self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
@@ -189,8 +204,6 @@ class VisionTransformer(nn.Module):
         trunc_normal_(self.pos_embed, std=.02)
         trunc_normal_(self.cls_token, std=.02)
         self.apply(self._init_weights)
-
-
 
         # set finetune flag
         self.has_mid_pe = False
@@ -215,31 +228,38 @@ class VisionTransformer(nn.Module):
         self.det_token_num = det_token_num
         self.det_token = nn.Parameter(torch.zeros(1, det_token_num, self.embed_dim))
         self.det_token = trunc_normal_(self.det_token, std=.02)
+        self.trh_token = nn.Parameter(torch.zeros(1, 1, self.embed_dim))
+
         cls_pos_embed = self.pos_embed[:, 0, :]
-        cls_pos_embed = cls_pos_embed[:,None]
+        cls_pos_embed = cls_pos_embed[:, None]
         det_pos_embed = torch.zeros(1, det_token_num, self.embed_dim)
         det_pos_embed = trunc_normal_(det_pos_embed, std=.02)
+        trh_pos_embed = torch.zeros(1, 1, self.embed_dim)
+        trh_pos_embed = trunc_normal_(trh_pos_embed, std=.02)
         patch_pos_embed = self.pos_embed[:, 1:, :]
-        patch_pos_embed = patch_pos_embed.transpose(1,2)
+        patch_pos_embed = patch_pos_embed.transpose(1, 2)
         B, E, Q = patch_pos_embed.shape
         P_H, P_W = self.img_size[0] // self.patch_size, self.img_size[1] // self.patch_size
         patch_pos_embed = patch_pos_embed.view(B, E, P_H, P_W)
         H, W = img_size
-        new_P_H, new_P_W = H//self.patch_size, W//self.patch_size
-        patch_pos_embed = nn.functional.interpolate(patch_pos_embed, size=(new_P_H,new_P_W), mode='bicubic', align_corners=False)
+        new_P_H, new_P_W = H // self.patch_size, W // self.patch_size
+        patch_pos_embed = nn.functional.interpolate(patch_pos_embed, size=(new_P_H, new_P_W), mode='bicubic',
+                                                    align_corners=False)
         patch_pos_embed = patch_pos_embed.flatten(2).transpose(1, 2)
-        self.pos_embed = torch.nn.Parameter(torch.cat((cls_pos_embed, patch_pos_embed, det_pos_embed), dim=1))
+        self.pos_embed = torch.nn.Parameter(torch.cat((cls_pos_embed, trh_pos_embed, patch_pos_embed, det_pos_embed), dim=1))
         self.img_size = img_size
         if mid_pe_size == None:
             self.has_mid_pe = False
             print('No mid pe')
         else:
             print('Has mid pe')
-            self.mid_pos_embed = nn.Parameter(torch.zeros(self.depth - 1, 1, 1 + (mid_pe_size[0] * mid_pe_size[1] // self.patch_size ** 2) + 100, self.embed_dim))
+            self.mid_pos_embed = nn.Parameter(
+                torch.zeros(self.depth - 1, 1, 1 + (mid_pe_size[0] * mid_pe_size[1] // self.patch_size ** 2) + 100,
+                            self.embed_dim))
             trunc_normal_(self.mid_pos_embed, std=.02)
             self.has_mid_pe = True
             self.mid_pe_size = mid_pe_size
-        self.use_checkpoint=use_checkpoint
+        self.use_checkpoint = use_checkpoint
 
     @torch.jit.ignore
     def no_weight_decay(self):
@@ -255,12 +275,13 @@ class VisionTransformer(nn.Module):
     def InterpolateInitPosEmbed(self, pos_embed, img_size=(800, 1344)):
         # import pdb;pdb.set_trace()
         cls_pos_embed = pos_embed[:, 0, :]
-        cls_pos_embed = cls_pos_embed[:,None]
-        det_pos_embed = pos_embed[:, -self.det_token_num:,:]
-        patch_pos_embed = pos_embed[:, 1:-self.det_token_num, :]
-        patch_pos_embed = patch_pos_embed.transpose(1,2)
+        cls_pos_embed = cls_pos_embed[:, None]
+        trsh_pos_embed = pos_embed[:, 1, :]
+        trsh_pos_embed = trsh_pos_embed[:, None]
+        det_pos_embed = pos_embed[:, -self.det_token_num:, :]
+        patch_pos_embed = pos_embed[:, 2:-self.det_token_num, :]
+        patch_pos_embed = patch_pos_embed.transpose(1, 2)
         B, E, Q = patch_pos_embed.shape
-
 
         P_H, P_W = self.img_size[0] // self.patch_size, self.img_size[1] // self.patch_size
         patch_pos_embed = patch_pos_embed.view(B, E, P_H, P_W)
@@ -269,27 +290,29 @@ class VisionTransformer(nn.Module):
         # patch_pos_embed = patch_pos_embed.view(B, E, P_H, P_W)
 
         H, W = img_size
-        new_P_H, new_P_W = H//self.patch_size, W//self.patch_size
-        patch_pos_embed = nn.functional.interpolate(patch_pos_embed, size=(new_P_H,new_P_W), mode='bicubic', align_corners=False)
+        new_P_H, new_P_W = H // self.patch_size, W // self.patch_size
+        patch_pos_embed = nn.functional.interpolate(patch_pos_embed, size=(new_P_H, new_P_W), mode='bicubic',
+                                                    align_corners=False)
         patch_pos_embed = patch_pos_embed.flatten(2).transpose(1, 2)
-        scale_pos_embed = torch.cat((cls_pos_embed, patch_pos_embed, det_pos_embed), dim=1)
+        scale_pos_embed = torch.cat((cls_pos_embed,trsh_pos_embed, patch_pos_embed, det_pos_embed), dim=1)
         return scale_pos_embed
 
     def InterpolateMidPosEmbed(self, pos_embed, img_size=(800, 1344)):
         # import pdb;pdb.set_trace()
         cls_pos_embed = pos_embed[:, :, 0, :]
-        cls_pos_embed = cls_pos_embed[:,None]
-        det_pos_embed = pos_embed[:, :, -self.det_token_num:,:]
+        cls_pos_embed = cls_pos_embed[:, None]
+        det_pos_embed = pos_embed[:, :, -self.det_token_num:, :]
         patch_pos_embed = pos_embed[:, :, 1:-self.det_token_num, :]
-        patch_pos_embed = patch_pos_embed.transpose(2,3)
+        patch_pos_embed = patch_pos_embed.transpose(2, 3)
         D, B, E, Q = patch_pos_embed.shape
 
         P_H, P_W = self.mid_pe_size[0] // self.patch_size, self.mid_pe_size[1] // self.patch_size
-        patch_pos_embed = patch_pos_embed.view(D*B, E, P_H, P_W)
+        patch_pos_embed = patch_pos_embed.view(D * B, E, P_H, P_W)
         H, W = img_size
-        new_P_H, new_P_W = H//self.patch_size, W//self.patch_size
-        patch_pos_embed = nn.functional.interpolate(patch_pos_embed, size=(new_P_H,new_P_W), mode='bicubic', align_corners=False)
-        patch_pos_embed = patch_pos_embed.flatten(2).transpose(1, 2).contiguous().view(D,B,new_P_H*new_P_W,E)
+        new_P_H, new_P_W = H // self.patch_size, W // self.patch_size
+        patch_pos_embed = nn.functional.interpolate(patch_pos_embed, size=(new_P_H, new_P_W), mode='bicubic',
+                                                    align_corners=False)
+        patch_pos_embed = patch_pos_embed.flatten(2).transpose(1, 2).contiguous().view(D, B, new_P_H * new_P_W, E)
         scale_pos_embed = torch.cat((cls_pos_embed, patch_pos_embed, det_pos_embed), dim=2)
         return scale_pos_embed
 
@@ -303,27 +326,27 @@ class VisionTransformer(nn.Module):
         x = self.patch_embed(x)
         # interpolate init pe
         if (self.pos_embed.shape[1] - 1 - self.det_token_num) != x.shape[1]:
-            temp_pos_embed = self.InterpolateInitPosEmbed(self.pos_embed, img_size=(H,W))
+            temp_pos_embed = self.InterpolateInitPosEmbed(self.pos_embed, img_size=(H, W))
         else:
             temp_pos_embed = self.pos_embed
         # interpolate mid pe
         if self.has_mid_pe:
             # temp_mid_pos_embed = []
             if (self.mid_pos_embed.shape[2] - 1 - self.det_token_num) != x.shape[1]:
-                temp_mid_pos_embed = self.InterpolateMidPosEmbed(self.mid_pos_embed, img_size=(H,W))
+                temp_mid_pos_embed = self.InterpolateMidPosEmbed(self.mid_pos_embed, img_size=(H, W))
             else:
                 temp_mid_pos_embed = self.mid_pos_embed
 
-
         cls_tokens = self.cls_token.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
+        trh_tokens = self.trh_token.expand(B, -1, -1)
         det_token = self.det_token.expand(B, -1, -1)
-        x = torch.cat((cls_tokens, x, det_token), dim=1)
+        x = torch.cat((cls_tokens, trh_tokens, x, det_token), dim=1)
         x = x + temp_pos_embed
         x = self.pos_drop(x)
 
         for i in range(len((self.blocks))):
             if self.use_checkpoint:
-                x = checkpoint.checkpoint(self.blocks[i], x)    # saves mem, takes time
+                x = checkpoint.checkpoint(self.blocks[i], x)  # saves mem, takes time
             else:
                 x = self.blocks[i](x)
             if self.has_mid_pe:
@@ -343,41 +366,40 @@ class VisionTransformer(nn.Module):
 
         x = self.patch_embed(x)
         # interpolate init pe
-        if (self.pos_embed.shape[1] - 1 - self.det_token_num) != x.shape[1]:
-            temp_pos_embed = self.InterpolateInitPosEmbed(self.pos_embed, img_size=(H,W))
+        if (self.pos_embed.shape[1] - 2 - self.det_token_num) != x.shape[1]:
+            temp_pos_embed = self.InterpolateInitPosEmbed(self.pos_embed, img_size=(H, W))
         else:
             temp_pos_embed = self.pos_embed
         # interpolate mid pe
         if self.has_mid_pe:
             # temp_mid_pos_embed = []
             if (self.mid_pos_embed.shape[2] - 1 - self.det_token_num) != x.shape[1]:
-                temp_mid_pos_embed = self.InterpolateMidPosEmbed(self.mid_pos_embed, img_size=(H,W))
+                temp_mid_pos_embed = self.InterpolateMidPosEmbed(self.mid_pos_embed, img_size=(H, W))
             else:
                 temp_mid_pos_embed = self.mid_pos_embed
 
-
         cls_tokens = self.cls_token.expand(B, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
         det_token = self.det_token.expand(B, -1, -1)
-        x = torch.cat((cls_tokens, x, det_token), dim=1)
+        trh_tokens = self.trh_token.expand(B, -1, -1)
+        x = torch.cat((cls_tokens, trh_tokens, x, det_token), dim=1)
         x = x + temp_pos_embed
         x = self.pos_drop(x)
         output = []
+        all_attentions  = []
         for i in range(len((self.blocks))):
             if self.use_checkpoint:
-                x = checkpoint.checkpoint(self.blocks[i], x)    # saves mem, takes time
+                x = checkpoint.checkpoint(self.blocks[i], x)  # saves mem, takes time
             else:
                 x, attn = self.blocks[i](x, return_attention=True)
+                all_attentions.append(attn)
 
-            if i == len(self.blocks)-1:
-                output.append(attn)
             if self.has_mid_pe:
                 if i < (self.depth - 1):
                     x = x + temp_mid_pos_embed[i]
 
         x = self.norm(x)
 
-        return output
-
+        return x[:, -self.det_token_num:, :], all_attentions
 
     def forward(self, x, return_attention=False):
         if return_attention == True:
@@ -397,11 +419,12 @@ def _conv_filter(state_dict, patch_size=16):
         out_dict[k] = v
     return out_dict
 
+
 def tiny(pretrained=None, **kwargs):
     model = VisionTransformer(
-                patch_size=16, embed_dim=192, depth=12, num_heads=3, mlp_ratio=4, qkv_bias=True,
-                norm_layer=partial(nn.LayerNorm, eps=1e-6))
-    if pretrained: 
+        patch_size=16, embed_dim=192, depth=12, num_heads=3, mlp_ratio=4, qkv_bias=True,
+        norm_layer=partial(nn.LayerNorm, eps=1e-6))
+    if pretrained:
         # checkpoint = torch.load('deit_tiny_patch16_224-a1311bcf.pth', map_location="cpu")
         # checkpoint = torch.hub.load_state_dict_from_url(
         #     url="https://dl.fbaipublicfiles.com/deit/deit_tiny_patch16_224-a1311bcf.pth",
@@ -411,7 +434,7 @@ def tiny(pretrained=None, **kwargs):
         model.load_state_dict(checkpoint["model"], strict=False)
     return model, 192
 
-    
+
 def small(pretrained=None, **kwargs):
     model = VisionTransformer(
         patch_size=16, embed_dim=384, depth=12, num_heads=6, mlp_ratio=4, qkv_bias=True,
@@ -429,7 +452,7 @@ def small(pretrained=None, **kwargs):
 
 def small_dWr(pretrained=None, **kwargs):
     model = VisionTransformer(
-        img_size=240, 
+        img_size=240,
         patch_size=16, embed_dim=330, depth=14, num_heads=6, mlp_ratio=4, qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
     if pretrained:
@@ -442,7 +465,7 @@ def small_dWr(pretrained=None, **kwargs):
 def base(pretrained=None, **kwargs):
     model = VisionTransformer(
         img_size=384, patch_size=16, embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
-        norm_layer=partial(nn.LayerNorm, eps=1e-6),is_distill=True, **kwargs)
+        norm_layer=partial(nn.LayerNorm, eps=1e-6), is_distill=True, **kwargs)
     if pretrained:
         # checkpoint = torch.load('deit_base_distilled_patch16_384-d0272ac0.pth', map_location="cpu")
         # checkpoint = torch.hub.load_state_dict_from_url(

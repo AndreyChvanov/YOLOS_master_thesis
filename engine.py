@@ -91,10 +91,16 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        outputs = model(samples)
+        outputs, all_attentions = model(samples, return_attention=True)
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
+        all_attentions = [attn[1] for attn in all_attentions]
+        all_attentions = torch.stack(all_attentions)
+        attn_weights_to_req = all_attentions[:, :, :, 2:-100, 2:-100]
+        req_loss_ber_layer = torch.sum(attn_weights_to_req ** 2, (2, 3, 4))
+        reg_loss = (req_loss_ber_layer * 5e-5).sum(axis=0).mean()
+        losses = losses + reg_loss
 
         # reduce losses over all GPUs for logging purposes
         loss_dict_reduced = utils.reduce_dict(loss_dict)
@@ -120,6 +126,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
         metric_logger.update(class_error=loss_dict_reduced['class_error'])
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+        metric_logger.update(reg_attn_loss=reg_loss.item())
         metric_logger.global_step += 1
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -145,7 +152,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        outputs = model(samples)
+        outputs, all_attentions = model(samples)
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
 
