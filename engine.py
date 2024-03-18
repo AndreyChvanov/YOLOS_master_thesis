@@ -99,7 +99,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         all_attentions = torch.stack(all_attentions)
         attn_weights_to_req = all_attentions[:, :, :, 2:-100, 2:-100]
         req_loss_ber_layer = torch.sum(attn_weights_to_req ** 2, (2, 3, 4))
-        reg_loss = (req_loss_ber_layer * 5e-5).sum(axis=0).mean()
+        reg_loss = (req_loss_ber_layer * 5e-6).sum(axis=0).mean()
         losses = losses + reg_loss
 
         # reduce losses over all GPUs for logging purposes
@@ -152,7 +152,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        outputs, all_attentions = model(samples)
+        outputs, all_attentions = model(samples, return_attention=True)
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
 
